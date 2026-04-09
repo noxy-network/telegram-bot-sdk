@@ -1,0 +1,62 @@
+{
+  "name": "@noxy-network/telegram-bot-sdk",
+  "version": "2.0.0",
+  "description": "Connect a Telegram bot to the Noxy Network: encrypted decision layer flows over a secure relay (gRPC).",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "proto"
+  ],
+  "scripts": {
+    "build": "tsc && node scripts/copy-kyber.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "node scripts/verify-smoke.mjs",
+    "prepare": "pnpm run build"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/noxy-network/telegram-bot-sdk.git"
+  },
+  "packageManager": "pnpm@10.23.0",
+  "keywords": [
+    "noxy",
+    "noxy-network",
+    "telegram",
+    "grpc",
+    "web3",
+    "decision-layer"
+  ],
+  "author": "Noxy Network",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@grpc/grpc-js": "^1.12.1",
+    "@grpc/proto-loader": "^0.7.13",
+    "@noble/ciphers": "^2.1.1",
+    "@noble/ed25519": "^3.0.1",
+    "@noble/hashes": "^2.0.1",
+    "@scure/base": "^1.2.6",
+    "json-with-bigint": "^3.5.2",
+    "uuid": "^13.0.0",
+    "viem": "^2.41.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.9.3"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true,
+    "registry": "https://registry.npmjs.org/"
+  }
+}
