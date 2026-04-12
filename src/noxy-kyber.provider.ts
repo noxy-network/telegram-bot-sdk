@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import KyberModule from './kyber/kyber.js';
 import { NoxyKyberProviderError } from './errors.js';
 
@@ -37,7 +37,10 @@ export class NoxyKyberProvider {
       const wasmBinary = ensureWasmBinary();
       const mod = await KyberModule({
         wasmBinary,
-        locateFile: (p: string, scriptDirectory: string) => new URL(p, scriptDirectory).href,
+        locateFile: (p: string) => {
+          const dir = path.dirname(fileURLToPath(import.meta.url));
+          return pathToFileURL(path.join(dir, 'kyber', p)).href;
+        },
       });
       return new NoxyKyberProvider(mod);
     })();

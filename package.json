@@ -1,6 +1,6 @@
 {
   "name": "@noxy-network/telegram-bot-sdk",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Connect a Telegram bot to the Noxy Network: encrypted decision layer flows over a secure relay (gRPC).",
   "type": "module",
   "main": "./dist/index.js",

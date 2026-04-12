@@ -1,4 +1,4 @@
-import type { NoxyIdentity, NoxyDecisionChoice, WalletAddress } from './types.js';
+import type { NoxyEncryptedDecision, NoxyIdentity, NoxyDecisionChoice, WalletAddress } from './types.js';
 import type { NoxyNetworkOptions } from './noxy-network-options.js';
 import { NoxyDeviceModule } from './noxy-device.js';
 import { NoxyNetworkModule } from './noxy-network.js';
@@ -91,7 +91,10 @@ export class NoxyTelegramClient implements NoxyTelegramClient {
     handler: (decisionId: string | undefined, decision: Record<string, unknown>) => void | Promise<void>
   ): Promise<void> {
     await this.#device.loadDevicePrivateKeys();
-    await this.#network.subscribeToDecisions(async (envelope, relayMessageId) => {
+    const wrapped = async (
+      envelope: NoxyEncryptedDecision,
+      relayMessageId: string | undefined
+    ): Promise<void> => {
       try {
         const decrypted = await decryptDecision(this.#device, envelope);
         if (!decrypted) return;
@@ -110,7 +113,44 @@ export class NoxyTelegramClient implements NoxyTelegramClient {
           err
         );
       }
+    };
+
+    if (this.#network.isReady) {
+      await this.#network.subscribeToDecisions(wrapped);
+    } else {
+      if (!this.#network.isConnected) await this.#network.connect();
+      await this.#restoreRelaySession(wrapped);
+    }
+
+    this.#network.setReconnectRestore(async () => {
+      await this.#restoreRelaySession(wrapped);
     });
+  }
+
+  async #restoreRelaySession(
+    wrapped: (
+      envelope: NoxyEncryptedDecision,
+      relayMessageId: string | undefined
+    ) => void | Promise<void>
+  ): Promise<void> {
+    await this.#device.loadDevicePrivateKeys();
+    const device = await this.#device.load(this.#identity.address, this.#networkOptions.appId);
+    if (!device) {
+      throw new NoxyInitializationError('Device not found after relay reconnect');
+    }
+    const requiresRegistration = await this.#network.authenticateDevice(device);
+    if (requiresRegistration) {
+      const sig = device.identitySignature;
+      if (!sig) {
+        throw new NoxyInitializationError('Device has no identity signature for relay registration');
+      }
+      await this.#network.announceDevice(
+        { publicKey: device.publicKey, pqPublicKey: device.pqPublicKey },
+        device.identityId,
+        sig
+      );
+    }
+    await this.#network.subscribeToDecisions(wrapped);
   }
 
   async sendDecisionOutcome(

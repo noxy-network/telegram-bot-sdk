@@ -37,6 +37,9 @@ export class NoxyNetworkModule {
   #decisionHandler:
     | ((envelope: NoxyEncryptedDecision, relayMessageId: string | undefined) => void | Promise<void>)
     | null = null;
+  #intentionalClose = false;
+  #reconnectRestore: (() => Promise<void>) | null = null;
+  #reconnectLoopPromise: Promise<void> | null = null;
 
   constructor(options: { appId: string; relayUrl: string }) {
     this.#appId = options.appId;
@@ -78,11 +81,64 @@ export class NoxyNetworkModule {
       void this.#onStreamData(response);
     });
     this.#call.on('error', (err: Error) => {
-      this.#rejectAllPending(err);
+      void this.#onStreamFatal(err);
     });
     this.#call.on('end', () => {
-      this.#rejectAllPending(new Error('Noxy relay stream ended'));
+      void this.#onStreamFatal(new Error('Noxy relay stream ended'));
     });
+  }
+
+  setReconnectRestore(handler: (() => Promise<void>) | null): void {
+    this.#reconnectRestore = handler;
+  }
+
+  #teardownTransport(err: Error): void {
+    this.#rejectAllPending(err);
+    try {
+      this.#call?.end();
+    } catch {}
+    this.#call = null;
+    try {
+      this.#client?.close();
+    } catch {}
+    this.#client = null;
+    this.#sessionId = undefined;
+    this.#networkDeviceId = undefined;
+  }
+
+  async #onStreamFatal(err: Error): Promise<void> {
+    if (this.#intentionalClose) return;
+    this.#teardownTransport(err);
+    if (!this.#reconnectRestore) return;
+    this.#scheduleReconnectLoop();
+  }
+
+  #scheduleReconnectLoop(): void {
+    if (this.#reconnectLoopPromise != null) return;
+    this.#reconnectLoopPromise = this.#reconnectLoop().finally(() => {
+      this.#reconnectLoopPromise = null;
+    });
+  }
+
+  async #reconnectLoop(): Promise<void> {
+    let attempt = 0;
+    while (!this.#intentionalClose && this.#reconnectRestore != null) {
+      const delay =
+        attempt === 0 ? 0 : Math.min(30_000, 1000 * 2 ** Math.min(attempt - 1, 5));
+      if (delay > 0) {
+        await new Promise<void>((r) => setTimeout(r, delay));
+      }
+      if (this.#intentionalClose || this.#reconnectRestore == null) break;
+      if (this.#call != null) return;
+      try {
+        await this.connect();
+        await this.#reconnectRestore();
+        return;
+      } catch {
+        this.#teardownTransport(new Error('Noxy relay reconnect attempt failed'));
+      }
+      attempt++;
+    }
   }
 
   #rejectAllPending(err: Error): void {
@@ -240,6 +296,7 @@ export class NoxyNetworkModule {
       relayMessageId: string | undefined
     ) => void | Promise<void>
   ): Promise<void> {
+    if (!this.#call) await this.connect();
     this.#decisionHandler = handler;
     const req: DeviceRequest = {
       subscribe_decisions: { subscribe: true },
@@ -306,17 +363,9 @@ export class NoxyNetworkModule {
   }
 
   async disconnect(): Promise<void> {
+    this.#intentionalClose = true;
+    this.#reconnectRestore = null;
     this.#decisionHandler = null;
-    this.#rejectAllPending(new Error('Disconnected'));
-    try {
-      this.#call?.end();
-    } catch {}
-    this.#call = null;
-    try {
-      this.#client?.close();
-    } catch {}
-    this.#client = null;
-    this.#sessionId = undefined;
-    this.#networkDeviceId = undefined;
+    this.#teardownTransport(new Error('Disconnected'));
   }
 }
