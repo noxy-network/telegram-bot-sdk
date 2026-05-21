@@ -1,21 +1,44 @@
 # 📦 @noxy-network/telegram-bot-sdk
 
-Telegram Bot SDK to integrate with the [Noxy](https://noxy.network) **Decision Layer**: subscribe to encrypted decision requests, present them to the user, and respond with decision — all with wallet-based identity.
+Telegram Bot SDK for [Noxy](https://noxy.network).
 
-It connects your bot to the **Noxy Network** relay over **gRPC (TLS)** so users can **approve or reject** requests from Telegram, with payloads **encrypted** for your registered device.
+## What is Noxy?
 
-If you are new to Noxy: think of it as a **decision layer** between your bot and operations—your bot receives **decision** events from the network, shows them in Telegram, then sends back **decision outcome**.
+[Noxy](https://noxy.network) adds **human-in-the-loop** guardrails between automation and sensitive actions: your integration receives encrypted prompts from the relay, you surface them (e.g. in Telegram), the **user makes a decision**, and you **`sendDecisionOutcome`**—without plaintext prompts on the relay.
 
-**Before you integrate:** Create your app at [noxy.network](https://noxy.network). When the app is created, you receive an **app id** and an **app token** (auth token). This SDK uses the **app id** (`appId` in `network`). The **app token** is for agent/orchestrator SDKs (Go, Rust, Python, Node, etc.), not for this package.
+This package connects your server to the **Noxy relay over gRPC (TLS)** so payloads stay **encrypted** for your registered device. Telegram UI (**GrammY**, Telegraf, etc.) is up to you; this SDK only handles **Noxy ↔ your server**.
+
+## Before you integrate
+
+Create your app at [noxy.network](https://noxy.network). On the dashboard, copy **APP_ID** into **`network.appId`** and **APP_SIGNING_SECRET** into **`network.appSigningSecret`**. Agent backends use a separate **app token**, not these values.
+
+## Features
+
+- **Human-in-the-loop** — Decrypted prompts in your handler; **`sendDecisionOutcome`** publishes the user’s outcome to the relay.
+- **gRPC** — Bidirectional stream to the relay (subscribe, ack, outcomes). Proto references ship under `proto/` in the npm package.
+- **Relay identities** — **`wallet`**, **`email`**, **`phone`**, **`user_id`** — see [Relay identity types](#relay-identity-types).
+- **Local device keys** — Encrypted on-disk storage under your chosen **`dataDir`**.
+
+## Relay identity types
+
+The relay **`identity_type`** values are **`wallet`**, **`email`**, **`phone`**, and **`user_id`**. In TypeScript use **`NOXY_IDENTITY_TYPE`** (`USER_ID` corresponds to wire **`user_id`**).
+
+### Initializing identities
+
+**Wallet** — `address` + `signer` (optional explicit `identityType: NOXY_IDENTITY_TYPE.WALLET`). Registration still uses **`network.appSigningSecret`** (**APP_SIGNING_SECRET**).
+
+**Email / phone / user_id** — `identityType` + **`identityId`** only (no signer). Registration uses **`network.appSigningSecret`** (**APP_SIGNING_SECRET**) for every kind.
+
+Use **`logicalIdentityId`** on the client for the stable string across kinds.
 
 ## What you need
 
 - **Node.js 18+**
-- A **wallet-backed identity** (Ethereum address + signer) your bot uses to authenticate with the relay
-- Your **app id** and the **relay URL** from Noxy (for example `https://relay.noxy.network`; the app id comes from creating the app above)
-- A **directory on disk** where the SDK can store device keys (created and encrypted automatically)
+- A configured **relay identity** (see [Relay identity types](#relay-identity-types))
+- Your dashboard **APP_ID**, **APP_SIGNING_SECRET**, and **relay URL** (e.g. `https://relay.noxy.network`)
+- A **directory on disk** for encrypted device keys (`storage.dataDir`)
 
-Telegram itself is **not** handled by this package. Use [GrammY](https://grammy.dev), Telegraf, or any other library for `getUpdates`, webhooks, keyboards, and messages. This SDK only handles **Noxy ↔ your server**.
+Telegram chat UX is **not** handled here — use [GrammY](https://grammy.dev), Telegraf, or similar.
 
 ## Install
 
@@ -31,22 +54,24 @@ yarn add @noxy-network/telegram-bot-sdk
 
 1. Call **`initialize()`**—it connects to the relay, loads or registers a **device**, and authenticates.
 2. Call **`on()`** with a handler `(decisionId, decision)` — `decision` is decrypted JSON from the relay; `decisionId` is resolved for use with **`sendDecisionOutcome()`**.
-3. After the user acts in Telegram, call **`sendDecisionOutcome()`** with **`NoxyDecisionOutcomeValues.APPROVE`** or **`NoxyDecisionOutcomeValues.REJECT`** (or the strings `'APPROVE'` / `'REJECT'`).
+3. After the user decides in Telegram, call **`sendDecisionOutcome()`** with the appropriate **`NoxyDecisionOutcomeValues`** case (for example **`APPROVE`** / **`REJECT`**, or the strings `'APPROVE'` / `'REJECT'`), matching whatever your integration exposes today.
 4. When shutting down, call **`close()`** to disconnect from the relay.
 
-## Example
+## Example (wallet)
 
 ```typescript
-import { NoxyDecisionOutcomeValues, NoxyTelegramClient } from '@noxy-network/telegram-bot-sdk';
+import { NoxyDecisionOutcomeValues, NoxyTelegramClient, NOXY_IDENTITY_TYPE } from '@noxy-network/telegram-bot-sdk';
 
 const client = await NoxyTelegramClient.create({
   identity: {
+    identityType: NOXY_IDENTITY_TYPE.WALLET,
     address: '0x…',
     signer: async (data) => wallet.signMessage({ message: { raw: data } }),
   },
   network: {
     appId: 'your-app-id',
     relayUrl: 'https://relay.noxy.network',
+    appSigningSecret: 'paste-app-signing-secret-here',
   },
   storage: { dataDir: './.noxy-data' },
 });
@@ -54,11 +79,31 @@ const client = await NoxyTelegramClient.create({
 await client.initialize();
 
 await client.on(async (decisionId, decision) => {
-  // Update Telegram UI, wait for user tap, then:
   if (decisionId) await client.sendDecisionOutcome(decisionId, NoxyDecisionOutcomeValues.APPROVE);
 });
 
 await client.close();
+```
+
+## Example (opaque user id on relay as `user_id`)
+
+```typescript
+import { NoxyTelegramClient, NOXY_IDENTITY_TYPE } from '@noxy-network/telegram-bot-sdk';
+
+const client = await NoxyTelegramClient.create({
+  identity: {
+    identityType: NOXY_IDENTITY_TYPE.USER_ID,
+    identityId: 'service-account-or-internal-user-id',
+  },
+  network: {
+    appId: 'your-app-id',
+    relayUrl: 'https://relay.noxy.network',
+    appSigningSecret: 'paste-app-signing-secret-here',
+  },
+  storage: { dataDir: './.noxy-data' },
+});
+
+await client.initialize();
 ```
 
 ## Protocol and transport

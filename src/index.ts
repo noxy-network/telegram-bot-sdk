@@ -1,7 +1,21 @@
 export { NoxyTelegramClient, type NoxyTelegramClientOptions } from './noxy-client.js';
 export type { NoxyNetworkOptions } from './noxy-network-options.js';
 export { NoxyDecisionOutcomeValues } from './types.js';
-export type { NoxyIdentity, NoxyDecisionChoice, WalletAddress } from './types.js';
+export type {
+  NoxyIdentity,
+  NoxyWalletIdentity,
+  NoxyEmailIdentity,
+  NoxyPhoneIdentity,
+  NoxyUserIdIdentity,
+  NoxyDecisionChoice,
+  WalletAddress,
+  NoxyRelayIdentityType,
+} from './types.js';
+export {
+  NOXY_IDENTITY_TYPE,
+  relayIdentityTypeOf,
+  logicalIdentityIdOf,
+} from './types.js';
 export type { NoxyFileStorageOptions } from './noxy-storage.js';
 export {
   NoxyGeneralError,

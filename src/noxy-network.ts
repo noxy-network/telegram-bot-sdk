@@ -9,7 +9,8 @@ import {
   type NoxyDecisionChoice,
   type NoxyDevice,
   type NoxyEncryptedDecision,
-  type WalletAddress,
+  NOXY_IDENTITY_TYPE,
+  type NoxyRelayIdentityType,
 } from './types.js';
 import { NoxyGeneralError } from './errors.js';
 
@@ -21,6 +22,21 @@ function toUint8Sync(v: unknown): Uint8Array {
   if (v instanceof Uint8Array) return v;
   if (typeof v === 'string') return base64.decode(v);
   throw new NoxyGeneralError('Invalid binary field in relay response');
+}
+
+function relayIdentityTypeToProtoEnum(t: NoxyRelayIdentityType): number {
+  switch (t) {
+    case NOXY_IDENTITY_TYPE.WALLET:
+      return 0;
+    case NOXY_IDENTITY_TYPE.EMAIL:
+      return 1;
+    case NOXY_IDENTITY_TYPE.PHONE:
+      return 2;
+    case NOXY_IDENTITY_TYPE.USER_ID:
+      return 3;
+    default:
+      return 0;
+  }
 }
 
 export class NoxyNetworkModule {
@@ -263,21 +279,26 @@ export class NoxyNetworkModule {
     return false;
   }
 
-  async announceDevice(
-    devicePubkeys: { publicKey: Uint8Array; pqPublicKey: Uint8Array },
-    walletAddress: WalletAddress,
-    signature: Uint8Array
-  ): Promise<void> {
-    const resp = await this.sendAndWait({
-      register_device: {
-        device_pubkeys: {
-          public_key: Buffer.from(devicePubkeys.publicKey),
-          pq_public_key: Buffer.from(devicePubkeys.pqPublicKey),
-        },
-        wallet_address: walletAddress,
-        signature: Buffer.from(signature),
-        type: NOXY_DEVICE_RELAY_TYPE_TELEGRAM,
+  async announceRegister(device: NoxyDevice, signature: Uint8Array): Promise<void> {
+    const identityType = device.identityType ?? NOXY_IDENTITY_TYPE.WALLET;
+    const protoEnum = relayIdentityTypeToProtoEnum(identityType);
+    const register_device: Record<string, unknown> = {
+      device_pubkeys: {
+        public_key: Buffer.from(device.publicKey),
+        pq_public_key: Buffer.from(device.pqPublicKey),
       },
+      signature: Buffer.from(signature),
+      type: NOXY_DEVICE_RELAY_TYPE_TELEGRAM,
+      identity_type: protoEnum,
+    };
+    if (identityType === NOXY_IDENTITY_TYPE.WALLET) {
+      register_device.wallet_address = device.identityId;
+    } else {
+      register_device.identity_id = device.identityId;
+    }
+
+    const resp = await this.sendAndWait({
+      register_device,
     });
 
     if (resp.error) {
@@ -336,7 +357,7 @@ export class NoxyNetworkModule {
     await this.sendAndWait(req);
   }
 
-  async revokeDevice(walletAddress: WalletAddress, signature: Uint8Array): Promise<void> {
+  async revokeDevice(walletAddress: string, signature: Uint8Array): Promise<void> {
     await this.sendAndWait({
       revoke_device: {
         wallet_address: walletAddress,
@@ -346,19 +367,28 @@ export class NoxyNetworkModule {
   }
 
   async rotateDeviceKeys(
+    device: NoxyDevice,
     newPubkeys: { publicKey: Uint8Array; pqPublicKey: Uint8Array },
-    walletAddress: WalletAddress,
     signature: Uint8Array
   ): Promise<void> {
-    await this.sendAndWait({
-      rotate_device_keys: {
-        new_pubkeys: {
-          public_key: Buffer.from(newPubkeys.publicKey),
-          pq_public_key: Buffer.from(newPubkeys.pqPublicKey),
-        },
-        wallet_address: walletAddress,
-        signature: Buffer.from(signature),
+    const identityType = device.identityType ?? NOXY_IDENTITY_TYPE.WALLET;
+    const protoEnum = relayIdentityTypeToProtoEnum(identityType);
+    const rotate_device_keys: Record<string, unknown> = {
+      new_pubkeys: {
+        public_key: Buffer.from(newPubkeys.publicKey),
+        pq_public_key: Buffer.from(newPubkeys.pqPublicKey),
       },
+      signature: Buffer.from(signature),
+      identity_type: protoEnum,
+    };
+    if (identityType === NOXY_IDENTITY_TYPE.WALLET) {
+      rotate_device_keys.wallet_address = device.identityId;
+    } else {
+      rotate_device_keys.identity_id = device.identityId;
+    }
+
+    await this.sendAndWait({
+      rotate_device_keys,
     });
   }
 

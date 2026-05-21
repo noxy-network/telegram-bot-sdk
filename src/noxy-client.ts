@@ -1,4 +1,10 @@
 import type { NoxyEncryptedDecision, NoxyIdentity, NoxyDecisionChoice, WalletAddress } from './types.js';
+import {
+  logicalIdentityIdOf,
+  NOXY_IDENTITY_TYPE,
+  relayIdentityTypeOf,
+  type NoxyWalletIdentity,
+} from './types.js';
 import type { NoxyNetworkOptions } from './noxy-network-options.js';
 import { NoxyDeviceModule } from './noxy-device.js';
 import { NoxyNetworkModule } from './noxy-network.js';
@@ -48,8 +54,16 @@ export class NoxyTelegramClient implements NoxyTelegramClient {
     return new NoxyTelegramClient(options.identity, options.network, device, net);
   }
 
+  /** Only defined when `identityType` is `wallet`. */
   get address(): WalletAddress {
-    return this.#identity.address;
+    if (relayIdentityTypeOf(this.#identity) !== NOXY_IDENTITY_TYPE.WALLET) {
+      throw new Error('address is only available when identity uses wallet identityType');
+    }
+    return (this.#identity as NoxyWalletIdentity).address;
+  }
+
+  get logicalIdentityId(): string {
+    return logicalIdentityIdOf(this.#identity);
   }
 
   get isDeviceActive(): boolean {
@@ -67,23 +81,17 @@ export class NoxyTelegramClient implements NoxyTelegramClient {
   async initialize(): Promise<void> {
     await this.#network.connect();
 
-    let device = await this.#device.load(this.#identity.address, this.#networkOptions.appId);
+    const id = logicalIdentityIdOf(this.#identity);
+    let device = await this.#device.load(id, this.#networkOptions.appId);
     if (!device) {
-      device = await this.#device.register(this.#networkOptions.appId, this.#identity);
+      device = await this.#device.register(this.#networkOptions.appId, this.#identity, this.#networkOptions.appSigningSecret);
     }
 
     const requiresRegistration = await this.#network.authenticateDevice(device);
 
     if (requiresRegistration) {
-      const sig = device.identitySignature;
-      if (!sig) {
-        throw new NoxyInitializationError('Device has no identity signature for relay registration');
-      }
-      await this.#network.announceDevice(
-        { publicKey: device.publicKey, pqPublicKey: device.pqPublicKey },
-        device.identityId,
-        sig
-      );
+      const sig = device.identitySignature ?? new Uint8Array(0);
+      await this.#network.announceRegister(device, sig);
     }
   }
 
@@ -134,21 +142,14 @@ export class NoxyTelegramClient implements NoxyTelegramClient {
     ) => void | Promise<void>
   ): Promise<void> {
     await this.#device.loadDevicePrivateKeys();
-    const device = await this.#device.load(this.#identity.address, this.#networkOptions.appId);
+    const device = await this.#device.load(logicalIdentityIdOf(this.#identity), this.#networkOptions.appId);
     if (!device) {
       throw new NoxyInitializationError('Device not found after relay reconnect');
     }
     const requiresRegistration = await this.#network.authenticateDevice(device);
     if (requiresRegistration) {
-      const sig = device.identitySignature;
-      if (!sig) {
-        throw new NoxyInitializationError('Device has no identity signature for relay registration');
-      }
-      await this.#network.announceDevice(
-        { publicKey: device.publicKey, pqPublicKey: device.pqPublicKey },
-        device.identityId,
-        sig
-      );
+      const sig = device.identitySignature ?? new Uint8Array(0);
+      await this.#network.announceRegister(device, sig);
     }
     await this.#network.subscribeToDecisions(wrapped);
   }
@@ -171,7 +172,7 @@ export class NoxyTelegramClient implements NoxyTelegramClient {
     const sig = await this.#device.getDeviceSignature();
     if (!sig) throw new Error('Unable to revoke device');
     await this.#device.revoke();
-    await this.#network.revokeDevice(this.#identity.address, sig);
+    await this.#network.revokeDevice(this.logicalIdentityId, sig);
   }
 
   async rotateKeys(): Promise<void> {
@@ -180,8 +181,9 @@ export class NoxyTelegramClient implements NoxyTelegramClient {
     await this.#device.rotateKeys();
     const pk = this.#device.publicKey;
     const pq = this.#device.pqPublicKey;
-    if (!pk || !pq) throw new Error('Missing device public keys after rotate');
-    await this.#network.rotateDeviceKeys({ publicKey: pk, pqPublicKey: pq }, this.#identity.address, sig);
+    const device = this.#device.currentDevice;
+    if (!pk || !pq || !device) throw new Error('Missing device public keys after rotate');
+    await this.#network.rotateDeviceKeys(device, { publicKey: pk, pqPublicKey: pq }, sig);
   }
 
   async close(): Promise<void> {

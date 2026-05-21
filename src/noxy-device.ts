@@ -1,21 +1,17 @@
 import { keygenAsync, signAsync } from '@noble/ed25519';
 import { keccak_256 } from '@noble/hashes/sha3.js';
 import { concatBytes, randomBytes } from '@noble/hashes/utils.js';
-import { hexToBytes, isBytes, isHex } from 'viem';
-import type { Signature } from './types.js';
-import type { NoxyDevice, NoxyDevicePrivateKeys, WalletAddress } from './types.js';
+import type { NoxyDevice, NoxyDevicePrivateKeys, NoxyIdentity } from './types.js';
+import { logicalIdentityIdOf, NOXY_IDENTITY_TYPE, relayIdentityTypeOf } from './types.js';
 import { NOXY_DEVICE_VERSION } from './constants.js';
 import { NoxyKyberProvider } from './noxy-kyber.provider.js';
 import type { NoxyFileStorage } from './noxy-storage.js';
-import type { NoxyIdentity } from './types.js';
-
-function signatureToBytes(sig: Signature | null): Uint8Array | null {
-  if (sig === null) return null;
-  if (isBytes(sig)) return new Uint8Array(sig);
-  const hex = (typeof sig === 'string' && (sig.startsWith('0x') ? sig : `0x${sig}`)) as `0x${string}`;
-  if (isHex(hex)) return hexToBytes(hex);
-  return null;
-}
+import {
+  signDeviceRegistrationMacForEmail,
+  signDeviceRegistrationMacForPhone,
+  signDeviceRegistrationMacForUserId,
+  signDeviceRegistrationMacForWallet,
+} from './device-registration-mac.js';
 
 export class NoxyDeviceModule {
   #device: NoxyDevice | undefined;
@@ -49,7 +45,11 @@ export class NoxyDeviceModule {
     );
   }
 
-  async load(identityId: WalletAddress, appId: string): Promise<NoxyDevice | undefined> {
+  get currentDevice(): NoxyDevice | undefined {
+    return this.#device;
+  }
+
+  async load(identityId: string, appId: string): Promise<NoxyDevice | undefined> {
     const pk = this.#storage.devicePk(appId, identityId);
     const all = await this.#storage.loadDevices();
     const raw = all[pk] as Record<string, unknown> | undefined;
@@ -60,9 +60,18 @@ export class NoxyDeviceModule {
   }
 
   #deserializeDevice(raw: Record<string, unknown>): NoxyDevice {
+    const identityTypeRaw = raw.identityType as string | undefined;
+    const identityType =
+      identityTypeRaw === NOXY_IDENTITY_TYPE.EMAIL ||
+      identityTypeRaw === NOXY_IDENTITY_TYPE.PHONE ||
+      identityTypeRaw === NOXY_IDENTITY_TYPE.USER_ID
+        ? identityTypeRaw
+        : NOXY_IDENTITY_TYPE.WALLET;
+
     return {
       appId: String(raw.appId),
-      identityId: raw.identityId as WalletAddress,
+      identityId: String(raw.identityId),
+      identityType,
       isRevoked: Boolean(raw.isRevoked),
       issuedAt: Number(raw.issuedAt),
       publicKey: new Uint8Array(raw.publicKey as number[]),
@@ -81,6 +90,7 @@ export class NoxyDeviceModule {
     all[pk] = {
       appId: this.#device.appId,
       identityId: this.#device.identityId,
+      identityType: this.#device.identityType ?? NOXY_IDENTITY_TYPE.WALLET,
       isRevoked: this.#device.isRevoked,
       issuedAt: this.#device.issuedAt,
       publicKey: Array.from(this.#device.publicKey),
@@ -90,14 +100,18 @@ export class NoxyDeviceModule {
     await this.#storage.saveDevices(all);
   }
 
-  async register(appId: string, identity: NoxyIdentity): Promise<NoxyDevice> {
+  async register(appId: string, identity: NoxyIdentity, appSigningSecret: string): Promise<NoxyDevice> {
     const { publicKey, secretKey } = await keygenAsync();
     const kyber = await NoxyKyberProvider.create();
     const pq = kyber.keypair();
 
+    const logicalId = logicalIdentityIdOf(identity);
+    const identityType = relayIdentityTypeOf(identity);
+
     const deviceData: NoxyDevice = {
       appId,
-      identityId: identity.address,
+      identityId: logicalId,
+      identityType,
       identitySignature: null,
       isRevoked: false,
       issuedAt: Date.now(),
@@ -105,13 +119,51 @@ export class NoxyDeviceModule {
       pqPublicKey: pq.publicKey,
     };
 
-    const hash = await this.buildIdentitySignatureHash(deviceData);
-    const sig = await identity.signer(hash);
-    const identitySig = signatureToBytes(sig);
-    if (!identitySig) {
-      throw new Error('Invalid identity signature from signer');
+    const secret = appSigningSecret.trim();
+    let mac: Uint8Array;
+    switch (identityType) {
+      case NOXY_IDENTITY_TYPE.EMAIL:
+        mac = signDeviceRegistrationMacForEmail(
+          secret,
+          appId,
+          logicalId,
+          publicKey,
+          pq.publicKey,
+          'telegram'
+        );
+        break;
+      case NOXY_IDENTITY_TYPE.PHONE:
+        mac = signDeviceRegistrationMacForPhone(
+          secret,
+          appId,
+          logicalId,
+          publicKey,
+          pq.publicKey,
+          'telegram'
+        );
+        break;
+      case NOXY_IDENTITY_TYPE.USER_ID:
+        mac = signDeviceRegistrationMacForUserId(
+          secret,
+          appId,
+          logicalId,
+          publicKey,
+          pq.publicKey,
+          'telegram'
+        );
+        break;
+      default:
+        mac = signDeviceRegistrationMacForWallet(
+          secret,
+          appId,
+          logicalId,
+          publicKey,
+          pq.publicKey,
+          'telegram'
+        );
+        break;
     }
-    deviceData.identitySignature = identitySig;
+    deviceData.identitySignature = mac;
 
     this.#device = deviceData;
     await this.#persistDevice();

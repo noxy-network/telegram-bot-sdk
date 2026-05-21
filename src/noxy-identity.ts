@@ -1,7 +1,8 @@
 import { randomBytes } from '@noble/hashes/utils.js';
 import { hexToBytes, toHex, verifyMessage } from 'viem';
 import type { Hash } from 'viem';
-import type { NoxyIdentity } from './types.js';
+import type { NoxyIdentity, NoxyWalletIdentity } from './types.js';
+import { NOXY_IDENTITY_TYPE, relayIdentityTypeOf } from './types.js';
 import { NoxyIdentityError } from './errors.js';
 
 function toBytes(sig: Uint8Array | string): Uint8Array {
@@ -13,8 +14,12 @@ function toBytes(sig: Uint8Array | string): Uint8Array {
 }
 
 export async function validateIdentity(identity: NoxyIdentity): Promise<void> {
-  const { address, signer } = identity;
-  if (!signer) throw new NoxyIdentityError('Signer function is required');
+  if (relayIdentityTypeOf(identity) !== NOXY_IDENTITY_TYPE.WALLET) {
+    return;
+  }
+
+  const signer = (identity as NoxyWalletIdentity).signer;
+  if (!signer) throw new NoxyIdentityError('Signer function is required for wallet identities');
 
   const payload = randomBytes(32);
   let signature: Uint8Array | string;
@@ -25,9 +30,10 @@ export async function validateIdentity(identity: NoxyIdentity): Promise<void> {
   }
   if (signature == null) throw new NoxyIdentityError('Signer returned empty signature');
 
+  const w = identity as NoxyWalletIdentity;
   const sigHex = typeof signature === 'string' ? (signature as Hash) : toHex(signature);
   const ok = await verifyMessage({
-    address,
+    address: w.address,
     message: { raw: payload },
     signature: sigHex,
   });
@@ -35,6 +41,9 @@ export async function validateIdentity(identity: NoxyIdentity): Promise<void> {
 }
 
 export async function signWithIdentity(identity: NoxyIdentity, data: Uint8Array): Promise<Uint8Array> {
-  const sig = await identity.signer(data);
+  if (relayIdentityTypeOf(identity) !== NOXY_IDENTITY_TYPE.WALLET) {
+    throw new NoxyIdentityError('signWithIdentity is only supported for wallet identities');
+  }
+  const sig = await (identity as NoxyWalletIdentity).signer(data);
   return toBytes(sig);
 }
